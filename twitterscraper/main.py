@@ -7,7 +7,9 @@ import argparse
 import collections
 import datetime as dt
 from os.path import isfile
-from twitterscraper.query import query_tweets, query_tweets_from_user
+from twitterscraper.query import query_tweets
+from twitterscraper.query import query_tweets_from_user
+from twitterscraper.query import query_user_info
 from twitterscraper.ts_logger import logger
 
 
@@ -57,7 +59,11 @@ def main():
                                 help="Set this flag if you want to save the results to a CSV format.")
         parser.add_argument("-u", "--user", action='store_true',
                             help="Set this flag to if you want to scrape tweets from a specific user"
-                                 "The query should then consist of the profilename you want to scrape without @")
+                                 "The query should then consist of the profilename (user) you want to scrape without @")
+        parser.add_argument("--profiles", action='store_true',
+                            help="Set this flag to if you want to scrape profile info of all the users where you" 
+                            "have previously scraped from. After all of the tweets have been scraped it will start"
+                            "a new process of scraping profile pages.")
         parser.add_argument("--lang", type=str, default=None,
                             help="Set this flag if you want to query tweets in \na specific language. You can choose from:\n"
                                  "en (English)\nar (Arabic)\nbn (Bengali)\n"
@@ -90,6 +96,7 @@ def main():
 
         if args.all:
             args.begindate = dt.date(2006,3,1)
+            args.enddate = dt.date.today()
 
         if args.user:
             tweets = query_tweets_from_user(user = args.query, limit = args.limit)
@@ -112,5 +119,31 @@ def main():
                                         x.text, x.html])
                     else:
                         json.dump(tweets, output, cls=JSONEncoder)
+
+            if args.profiles and tweets:
+                list_users = list(set([tweet.user for tweet in tweets]))
+                # list_users_info = [query_user_info(elem) for elem in list_users]
+                filename = 'userprofiles_' + args.output
+
+                with open(filename, "w", encoding="utf-8") as output:
+                    if args.csv:
+                        f = csv.writer(output)
+                        f.writerow(["user","fullname","location","blog","date_joined","id","num_tweets","following","followers","likes","lists"])
+                        for elem in list_users:
+                            u = query_user_info(elem)
+                            if u is None:
+                                continue
+                            else:
+                                f.writerow([u.user, u.full_name, u.location, u.blog, u.date_joined, u.id, u.tweets, u.following,
+                                u.followers, u.likes, u.lists])
+
+                    else:
+                        for elem in list_users:
+                            u = query_user_info(elem)
+                            if u is None:
+                                continue
+                            else:
+                                json.dump(u, output, cls=JSONEncoder, indent=2)
+
     except KeyboardInterrupt:
         logger.info("Program interrupted by user. Quitting...")
