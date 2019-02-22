@@ -10,6 +10,7 @@ from twitterscraper.tweet import Tweet
 from twitterscraper.ts_logger import logger
 from twitterscraper.user import User
 import urllib
+import sys
 
 HEADERS_LIST = [
     'Mozilla/5.0 (Windows; U; Windows NT 6.1; x64; fr; rv:1.9.2.13) Gecko/20101203 Firebird/3.6.13',
@@ -31,6 +32,18 @@ RELOAD_URL_USER = 'https://twitter.com/i/profiles/show/{u}/timeline/tweets?' \
                   'max_position={pos}&reset_error_state=false'
 
 
+def get_query_url(query, lang, pos, from_user = False):
+    if from_user:
+        if pos is None:
+            return INIT_URL_USER.format(u=query)
+        else:
+            return RELOAD_URL_USER.format(u=query, pos=pos)
+    if pos is None:
+        return INIT_URL.format(q=query, lang=lang)
+    else:
+        return RELOAD_URL.format(q=query, pos=pos, lang=lang)
+
+
 def linspace(start, stop, n):
     if n == 1:
         yield stop
@@ -40,20 +53,24 @@ def linspace(start, stop, n):
         yield start + h * i
 
 
-def query_single_page(url, html_response=True, retry=10, from_user=False):
+
+def query_single_page(query, lang, pos, retry=10, from_user=False):
     """
     Returns tweets from the given URL.
 
-    :param url: The URL to get the tweets from
-    :param html_response: False, if the HTML is embedded in a JSON
+    :param query: The query parameter of the query url
+    :param lang: The language parameter of the query url
+    :param pos: The query url parameter that determines where to start looking
     :param retry: Number of retries if something goes wrong.
     :return: The list of tweets, the pos argument for getting the next page.
     """
+    url = get_query_url(query, lang, pos, from_user)
 
     try:
         response = requests.get(url, headers=HEADER)
-        if html_response:
+        if pos is None:  # html response
             html = response.text or ''
+            json_resp = None
         else:
             html = ''
             try:
@@ -65,15 +82,20 @@ def query_single_page(url, html_response=True, retry=10, from_user=False):
         tweets = list(Tweet.from_html(html))
 
         if not tweets:
-            return [], None
+            if json_resp:
+                pos = json_resp['min_position']
+            else:
+                pos = None
+            if retry > 0:
+                return query_single_page(query, lang, pos, retry - 1, from_user)
+            else:
+                return [], pos
 
-        if not html_response:
+        if json_resp:
             return tweets, urllib.parse.quote(json_resp['min_position'])
-
         if from_user:
             return tweets, tweets[-1].id
-        else:
-            return tweets, "TWEET-{}-{}".format(tweets[-1].id, tweets[0].id)
+        return tweets, "TWEET-{}-{}".format(tweets[-1].id, tweets[0].id)
 
     except requests.exceptions.HTTPError as e:
         logger.exception('HTTPError {} while requesting "{}"'.format(
@@ -90,13 +112,13 @@ def query_single_page(url, html_response=True, retry=10, from_user=False):
 
     if retry > 0:
         logger.info('Retrying... (Attempts left: {})'.format(retry))
-        return query_single_page(url, html_response, retry-1)
+        return query_single_page(query, lang, pos, retry - 1)
 
     logger.error('Giving up.')
     return [], None
 
 
-def query_tweets_once_generator(query, limit=None, lang=''):
+def query_tweets_once_generator(query, limit=None, lang='', pos=None):
     """
     Queries twitter for all the tweets you want! It will load all pages it gets
     from twitter. However, twitter might out of a sudden stop serving new pages,
@@ -109,21 +131,16 @@ def query_tweets_once_generator(query, limit=None, lang=''):
                   https://twitter.com/search-advanced and just copy the query!
     :param limit: Scraping will be stopped when at least ``limit`` number of
                   items are fetched.
-    :param num_tweets: Number of tweets fetched outside this function.
+    :param pos: Field used as a "checkpoint" to continue where you left off in iteration
     :return:      A list of twitterscraper.Tweet objects. You will get at least
                   ``limit`` number of items.
     """
     logger.info('Querying {}'.format(query))
     query = query.replace(' ', '%20').replace('#', '%23').replace(':', '%3A')
-    pos = None
     num_tweets = 0
     try:
         while True:
-            new_tweets, pos = query_single_page(
-                INIT_URL.format(q=query, lang=lang) if pos is None
-                else RELOAD_URL.format(q=query, pos=pos, lang=lang),
-                pos is None
-            )
+            new_tweets, new_pos = query_single_page(query, lang, pos)
             if len(new_tweets) == 0:
                 logger.info('Got {} tweets for {}.'.format(
                     num_tweets, query))
@@ -131,6 +148,9 @@ def query_tweets_once_generator(query, limit=None, lang=''):
 
             for t in new_tweets:
                 yield t, pos
+
+            # use new_pos only once you have iterated through all old tweets
+            pos = new_pos
 
             num_tweets += len(new_tweets)
 
@@ -158,8 +178,12 @@ def query_tweets_once(*args, **kwargs):
         return []
 
 
-def query_tweets(query, limit=None, begindate=dt.date(2006,3,21), enddate=dt.date.today(), poolsize=20, lang=''):
+def query_tweets(query, limit=None, begindate=dt.date(2006, 3, 21), enddate=dt.date.today(), poolsize=20, lang=''):
     no_days = (enddate - begindate).days
+    
+    if(no_days < 0):
+        sys.exit('Begin date must occur before end date.')
+    
     if poolsize > no_days:
         # Since we are assigning each pool a range of dates to query,
 		# the number of pools should not exceed the number of dates.
@@ -198,9 +222,7 @@ def query_tweets_from_user(user, limit=None):
     tweets = []
     try:
         while True:
-           new_tweets, pos = query_single_page(INIT_URL_USER.format(u=user) if pos is None
-                                               else RELOAD_URL_USER.format(u=user, pos=pos), pos is None,
-                                               from_user=True)
+           new_tweets, pos = query_single_page(user, lang='', pos=pos, from_user=True)
            if len(new_tweets) == 0:
                logger.info("Got {} tweets from username {}".format(len(tweets), user))
                return tweets
@@ -235,8 +257,7 @@ def query_user_page(url, retry=10):
         response = requests.get(url, headers=HEADER)
         html = response.text or ''
 
-        user = User()
-        user_info = user.from_html(html)
+        user_info = User.from_html(html)
         if not user_info:
             return None
 
@@ -278,6 +299,3 @@ def query_user_info(user):
         logger.info("Program interrupted by user. Returning user information gathered so far...")
     except BaseException:
         logger.exception("An unknown error occurred! Returning user information gathered so far...")
-
-    logger.info(f"Got user information from username {user}")
-    return user_info             
