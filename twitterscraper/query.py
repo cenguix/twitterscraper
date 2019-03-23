@@ -10,6 +10,7 @@ from twitterscraper.tweet import Tweet
 from twitterscraper.ts_logger import logger
 from twitterscraper.user import User
 import urllib
+import sys
 
 HEADERS_LIST = [
     'Mozilla/5.0 (Windows; U; Windows NT 6.1; x64; fr; rv:1.9.2.13) Gecko/20101203 Firebird/3.6.13',
@@ -53,7 +54,7 @@ def linspace(start, stop, n):
 
 
 
-def query_single_page(query, lang, pos, retry=50, from_user=False):
+def query_single_page(query, lang, pos, retry=10, from_user=False):
     """
     Returns tweets from the given URL.
 
@@ -221,7 +222,7 @@ def query_tweets_from_user(user, limit=None):
     tweets = []
     try:
         while True:
-           new_tweets, pos = query_single_page(query, lang='', pos=pos, from_user=True)
+           new_tweets, pos = query_single_page(user, lang='', pos=pos, from_user=True)
            if len(new_tweets) == 0:
                logger.info("Got {} tweets from username {}".format(len(tweets), user))
                return tweets
